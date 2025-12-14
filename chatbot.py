@@ -1,6 +1,3 @@
-"""
-NLP движок чат-бота
-"""
 
 import re
 import random
@@ -8,26 +5,46 @@ import numpy as np
 from typing import Dict, List, Tuple, Optional
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
+
+# Безопасная загрузка NLTK
 import nltk
-from nltk.stem import SnowballStemmer
-from nltk.tokenize import word_tokenize
+import ssl
+
+# Отключаем проверку SSL для загрузки
+try:
+    _create_unverified_https_context = ssl._create_unverified_context
+except AttributeError:
+    pass
+else:
+    ssl._create_default_https_context = _create_unverified_https_context
 
 # Загружаем необходимые ресурсы NLTK
-try:
-    nltk.data.find('tokenizers/punkt')
-except LookupError:
-    nltk.download('punkt', quiet=True)
+def download_nltk_data():
+    """Безопасная загрузка NLTK данных"""
+    resources = ['punkt', 'stopwords']
+    for resource in resources:
+        try:
+            nltk.data.find(f'tokenizers/{resource}')
+        except LookupError:
+            try:
+                nltk.download(resource, quiet=True)
+            except Exception as e:
+                print(f"Предупреждение: не удалось загрузить {resource}: {e}")
 
+# Пытаемся загрузить при импорте
 try:
-    nltk.data.find('tokenizers/punkt_tab')
-except LookupError:
-    nltk.download('punkt_tab', quiet=True)
+    download_nltk_data()
+except Exception as e:
+    print(f"Предупреждение NLTK: {e}")
 
 
 class NLPChatBot:
     def __init__(self):
-        self.stemmer = SnowballStemmer("russian")
-        self.vectorizer = TfidfVectorizer(tokenizer=self._tokenize, lowercase=True)
+        self.vectorizer = TfidfVectorizer(
+            tokenizer=self._tokenize,
+            lowercase=True,
+            token_pattern=None  # Отключаем встроенный токенизатор
+        )
         self.patterns: List[str] = []
         self.intents: List[str] = []
         self.responses: Dict[str, List[str]] = {}
@@ -35,14 +52,44 @@ class NLPChatBot:
         self.tfidf_matrix = None
         self.confidence_threshold = 0.3
 
-        # Синонимы для расширения понимания
-        self.synonyms = {
-            "привет": ["хай", "хеллоу", "здравствуй", "здорово", "салют"],
-            "пока": ["до свидания", "бай", "прощай", "увидимся"],
-            "спасибо": ["благодарю", "спс", "пасиб", "мерси"],
-            "хорошо": ["отлично", "супер", "замечательно", "прекрасно"],
-            "плохо": ["ужасно", "отстой", "кошмар", "беда"],
+        # Русские стоп-слова
+        self.stop_words = {
+            'и', 'в', 'во', 'не', 'что', 'он', 'на', 'я', 'с', 'со', 'как',
+            'а', 'то', 'все', 'она', 'так', 'его', 'но', 'да', 'ты', 'к',
+            'у', 'же', 'вы', 'за', 'бы', 'по', 'только', 'её', 'мне', 'было',
+            'вот', 'от', 'меня', 'ещё', 'нет', 'о', 'из', 'ему', 'теперь',
+            'когда', 'уже', 'для', 'вот', 'кто', 'этот', 'того', 'потому',
+            'этого', 'какой', 'совсем', 'ним', 'здесь', 'этом', 'один',
+            'почти', 'мой', 'тем', 'чтобы', 'нее', 'сейчас', 'были', 'куда',
+            'зачем', 'всех', 'никогда', 'можно', 'при', 'наконец', 'два',
+            'об', 'другой', 'хоть', 'после', 'над', 'больше', 'тот', 'через',
+            'эти', 'нас', 'про', 'всего', 'них', 'какая', 'много', 'разве',
+            'три', 'эту', 'моя', 'впрочем', 'хорошо', 'свою', 'этой', 'перед',
+            'иногда', 'лучше', 'чуть', 'том', 'нельзя', 'такой', 'им', 'более',
+            'всегда', 'конечно', 'всю', 'между', 'the', 'a', 'an', 'is', 'are',
+            'was', 'were', 'be', 'been', 'being', 'have', 'has', 'had', 'do',
+            'does', 'did', 'will', 'would', 'could', 'should', 'may', 'might',
+            'must', 'shall', 'can', 'need', 'dare', 'ought', 'used', 'to'
         }
+
+        # Простые окончания для стемминга
+        self.endings = ['ами', 'ями', 'ах', 'ях', 'ой', 'ей', 'ом', 'ем',
+                       'ого', 'его', 'ому', 'ему', 'ых', 'их', 'ую', 'юю',
+                       'ая', 'яя', 'ое', 'ее', 'ие', 'ые', 'ий', 'ый', 'ой',
+                       'ов', 'ев', 'ам', 'ям', 'ть', 'ешь', 'ет', 'ем', 'ете',
+                       'ут', 'ют', 'ишь', 'ит', 'им', 'ите', 'ат', 'ят']
+
+    def _simple_stem(self, word: str) -> str:
+        """Простой стемминг без NLTK"""
+        word = word.lower()
+        if len(word) <= 3:
+            return word
+
+        for ending in sorted(self.endings, key=len, reverse=True):
+            if word.endswith(ending) and len(word) - len(ending) >= 2:
+                return word[:-len(ending)]
+
+        return word
 
     def _tokenize(self, text: str) -> List[str]:
         """Токенизация и стемминг текста"""
@@ -51,16 +98,18 @@ class NLPChatBot:
         text = re.sub(r'[^\w\s]', ' ', text)
         text = re.sub(r'\s+', ' ', text).strip()
 
-        # Токенизация
-        try:
-            tokens = word_tokenize(text, language='russian')
-        except:
-            tokens = text.split()
+        # Простая токенизация по пробелам
+        tokens = text.split()
 
-        # Стемминг
-        stemmed = [self.stemmer.stem(token) for token in tokens if len(token) > 1]
+        # Фильтрация и стемминг
+        result = []
+        for token in tokens:
+            if len(token) > 1 and token not in self.stop_words:
+                stemmed = self._simple_stem(token)
+                if len(stemmed) > 1:
+                    result.append(stemmed)
 
-        return stemmed
+        return result if result else ['_empty_']
 
     def train(self, patterns: List[Tuple[str, str]], responses: Dict[str, List[str]]):
         """Обучение модели"""
@@ -73,44 +122,39 @@ class NLPChatBot:
             self.intents.append(intent)
 
         if self.patterns:
-            self.tfidf_matrix = self.vectorizer.fit_transform(self.patterns)
-            self.is_trained = True
-            print(f"✅ Модель обучена на {len(self.patterns)} паттернах")
+            try:
+                self.tfidf_matrix = self.vectorizer.fit_transform(self.patterns)
+                self.is_trained = True
+                print(f"✅ Модель обучена на {len(self.patterns)} паттернах")
+            except Exception as e:
+                print(f"❌ Ошибка обучения: {e}")
+                self.is_trained = False
         else:
             print("⚠️ Нет данных для обучения")
-
-    def _expand_with_synonyms(self, text: str) -> str:
-        """Расширение текста синонимами"""
-        words = text.lower().split()
-        expanded = words.copy()
-
-        for word in words:
-            for base, syns in self.synonyms.items():
-                if word == base or word in syns:
-                    expanded.extend(syns)
-                    expanded.append(base)
-
-        return ' '.join(set(expanded))
 
     def predict(self, text: str) -> Tuple[str, float]:
         """Предсказание интента"""
         if not self.is_trained:
             return "unknown", 0.0
 
-        # Преобразуем входной текст
-        text_vector = self.vectorizer.transform([text])
+        try:
+            # Преобразуем входной текст
+            text_vector = self.vectorizer.transform([text])
 
-        # Вычисляем косинусное сходство
-        similarities = cosine_similarity(text_vector, self.tfidf_matrix).flatten()
+            # Вычисляем косинусное сходство
+            similarities = cosine_similarity(text_vector, self.tfidf_matrix).flatten()
 
-        # Находим лучшее совпадение
-        best_idx = np.argmax(similarities)
-        confidence = similarities[best_idx]
+            # Находим лучшее совпадение
+            best_idx = np.argmax(similarities)
+            confidence = float(similarities[best_idx])
 
-        if confidence < self.confidence_threshold:
-            return "unknown", confidence
+            if confidence < self.confidence_threshold:
+                return "unknown", confidence
 
-        return self.intents[best_idx], confidence
+            return self.intents[best_idx], confidence
+        except Exception as e:
+            print(f"Ошибка предсказания: {e}")
+            return "unknown", 0.0
 
     def get_response(self, intent: str) -> str:
         """Получить случайный ответ для интента"""
