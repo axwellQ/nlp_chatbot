@@ -1,8 +1,3 @@
-"""
-🤖 NLP Chatbot - Умный чат-бот
-FastAPI + NLP + Современный UI
-"""
-
 from fastapi import FastAPI, Request, Form
 from fastapi.responses import HTMLResponse, JSONResponse
 from starlette.middleware.sessions import SessionMiddleware
